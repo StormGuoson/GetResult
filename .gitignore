@@ -1,5 +1,7 @@
 venv
-dist
-build
 .idea
 get_result.spec
+tools/test.py
+main/build
+main/dist
+main/*.mp3
