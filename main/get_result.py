@@ -24,9 +24,12 @@ STOP_ALL = True
 debug_mode = False  # 调试模式，关闭结果上屏
 is_save_log = False  # 保存日志
 is_wakeup_bc = False  # 唤醒播测模式
+is_pulling_audio = True  # 是否正在导出音频
+ready_recording = False  # 准备录音
+isplaying = False  # 唤醒音频是否正在播放
 save_result = r'd:\log'  # 日志文件夹
 save_audio = r'd:\audio'  # 保存音频文件夹
-wakeup_audio_path = ''  # 唤醒音频路径
+wakeup_audio_path = r'd:\audio'  # 唤醒音频路径
 wakeup_bc_tot_count = 5  # 唤醒播测总次数
 wakeup_bc_cur_count = 0  # 唤醒播测当前播放次数
 td = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
@@ -84,11 +87,11 @@ def auto_set(_text, _sn, _frame):
 
 def _as(_text, _sn, frame):
     if _text is not '':
-        frame.txt_log.SetDefaultStyle(wx.TextAttr('BLACK'))
         frame.txt_log.write(_text + '\n')
     if _sn is not '':
         frame.txt_log.SetDefaultStyle(wx.TextAttr('BLUE'))
         frame.txt_log.write(_sn + '\n')
+        frame.txt_log.SetDefaultStyle(wx.TextAttr('BLACK'))
     if _text is '':
         return
     for d in range(len(ACTIVE_DEVICES)):
@@ -152,10 +155,13 @@ def save_log(no):
 def write_wakeup(txt, no, *arg):
     L.acquire()
     DATA['is_wakeup' + str(no)] = True
-    txt.txt_log.SetDefaultStyle(wx.TextAttr('BLACK'))
-    for d in range(len(ACTIVE_DEVICES)):
+    for d, dev in enumerate(ACTIVE_DEVICES):
+        if is_wakeup_bc:
+            threading.Thread(
+                target=lambda: os.system('adb -s %s shell input tap 100 100' % dev)).start()
         d = str(d)
         DATA['text' + d] = DATA['sn' + d] = ''
+
     if ('wakeup_count' + no) in DATA:
         DATA['wakeup_count' + no] += 1
     else:
@@ -278,7 +284,6 @@ def consume(command, frame, no):
     stderr_reader = AsynchronousFileReader(process.stderr, stderr_queue)
     stderr_reader.start()
     # Check the queues if we received some output (until there is nothing more to get).
-    frame.txt_log.SetDefaultStyle(wx.TextAttr('BLACK'))
     frame.txt_log.write(('No%s_' % str(int(no) + 1)) + ACTIVE_DEVICES[int(no)] + u' <<<开始>>>' + '\n')
     _mod = get_own_mod(no)
     log = None
@@ -289,7 +294,6 @@ def consume(command, frame, no):
             print('stop')
             L.acquire()
             frame.btn_start.SetLabel(u'开始')
-            frame.txt_log.SetDefaultStyle(wx.TextAttr('BLACK'))
             frame.txt_log.write(('No%s' % str(int(no) + 1)) + u' <<<停止>>>' + '\n')
             L.release()
             break
@@ -302,17 +306,20 @@ def consume(command, frame, no):
             except Exception as e:
                 frame.txt_log.SetDefaultStyle(wx.TextAttr('RED'))
                 frame.txt_log.write(repr(e))
+                frame.txt_log.SetDefaultStyle(wx.TextAttr('BLACK'))
         while not stderr_queue.empty():
             line = stderr_queue.get().decode("utf-8", errors="ignore")
             L.acquire()
             frame.txt_log.SetDefaultStyle(wx.TextAttr('RED'))
             frame.txt_log.write(line)
+            frame.txt_log.SetDefaultStyle(wx.TextAttr('BLACK'))
             L.release()
             if 'replaced' in line:
                 continue
             print('Received line on standard error: ' + repr(line))
             frame.txt_log.SetDefaultStyle(wx.TextAttr('RED'))
             frame.txt_log.write(repr(line))
+            frame.txt_log.SetDefaultStyle(wx.TextAttr('BLACK'))
             STOP_ALL = True
             frame.btn_start.SetLabel(u'开始')
         # Sleep a bit before asking the readers again.
@@ -320,9 +327,11 @@ def consume(command, frame, no):
             time.sleep(.1)
         except KeyboardInterrupt:
             pass
+
     if is_save_log:
         log.close()
-    frame.FindWindowById(22).Enable(True)
+    frame.FindWindowById(id_cb_save_log).Enable(True)
+    frame.FindWindowById(id_cb_wakeup_broadcast).Enable(True)
     # Let's be tidy and join the threads we've started.
     # stdout_reader.join()
     # stderr_reader.join()
@@ -340,6 +349,7 @@ def consume(command, frame, no):
     try:
         frame.txt_log.SetDefaultStyle(wx.TextAttr('RED'))
         frame.txt_log.write(ACTIVE_DEVICES[int(no)] + u' <<<断开连接>>>' + '\n')
+        frame.txt_log.SetDefaultStyle(wx.TextAttr('BLACK'))
     except IndexError as e:
         print(repr(e))
     frame.refresh_devices()
@@ -396,6 +406,12 @@ class MyFrame(wx.Frame):
         self.Centre()
         self.init_ele()
 
+        self.FindWindowById(id_tc_save_log_path).Show(False)
+        self.FindWindowById(id_cb_save_log).Show(False)
+        # self.FindWindowById(id_btn_save_record).Enable(False)
+        self.FindWindowById(id_tc_wakeup_bc_tot_count).Enable(False)
+        self.FindWindowById(id_tc_save_wakeup_result_path).Enable(False)
+
         self.refresh_devices()
 
     def init_ele(self):
@@ -408,11 +424,13 @@ class MyFrame(wx.Frame):
             self.Bind(wx.EVT_CHECKBOX, self.set_options, cb)
         self.Bind(wx.EVT_TEXT, self.save_path,
                   wx.TextCtrl(self, id_tc_save_log_path, value=r'd:\log', pos=(10, 60)))
+        wx.StaticText(self, label=u'唤醒音频路径', pos=(10, 70))
         self.Bind(wx.EVT_TEXT, self.save_path,
-                  wx.TextCtrl(self, id_tc_save_wakeup_result_path, pos=(10, 60)))
-
-        self.FindWindowById(id_tc_save_log_path).Show(False)
-        self.FindWindowById(id_cb_save_log).Show(False)
+                  wx.TextCtrl(self, id_tc_save_wakeup_result_path, wakeup_audio_path, pos=(85, 65), size=(100, -1)))
+        wx.StaticText(self, label=u'循环次数', pos=(90, 40))
+        self.Bind(wx.EVT_TEXT, self.save_path,
+                  wx.TextCtrl(self, id_tc_wakeup_bc_tot_count, str(id_tc_wakeup_bc_tot_count), pos=(145, 36),
+                              size=(40, -1)))
 
         # 选择模式
         index = 0
@@ -455,7 +473,6 @@ class MyFrame(wx.Frame):
         # 保存音频btn
         self.Bind(wx.EVT_BUTTON, self.button_action,
                   wx.Button(self, id_btn_save_record, label=u'保存音频', pos=(420, 258)))
-        self.FindWindowById(id_btn_save_record).Enable(False)
 
         # 输出log
         self.txt_log = wx.TextCtrl(self, id_tc_log_view, pos=(190, 80), size=(330, 170),
@@ -493,6 +510,9 @@ class MyFrame(wx.Frame):
                 is_save_log = True
             elif _id == id_cb_wakeup_broadcast:
                 is_wakeup_bc = True
+                self.FindWindowById(id_tc_wakeup_bc_tot_count).Enable(True)
+                self.FindWindowById(id_tc_save_wakeup_result_path).Enable(True)
+                self.FindWindowById(id_tc_wakeup_bc_tot_count).SetFocus()
         else:
             if _id == id_cb_copy_xls:
                 debug_mode = True
@@ -500,6 +520,8 @@ class MyFrame(wx.Frame):
                 is_save_log = False
             elif _id == id_cb_wakeup_broadcast:
                 is_wakeup_bc = False
+                self.FindWindowById(id_tc_wakeup_bc_tot_count).Enable(False)
+                self.FindWindowById(id_tc_save_wakeup_result_path).Enable(False)
 
     def set_module(self, event):
         global CURRENT_MODULE, STOP_ALL, ACTIVE_DEVICES
@@ -532,7 +554,7 @@ class MyFrame(wx.Frame):
         print(ACTIVE_MODULES)
 
     def button_action(self, event):
-        global STOP_ALL, wakeup_audio_path
+        global STOP_ALL, wakeup_audio_path, wakeup_bc_tot_count
         btn = event.GetEventObject()
         bid = btn.GetId()
         # 开始按钮
@@ -541,21 +563,32 @@ class MyFrame(wx.Frame):
             if STOP_ALL:
                 if len(ACTIVE_DEVICES) < 1:
                     self.txt_log.SetDefaultStyle(wx.TextAttr('RED'))
+                    self.txt_log.SetValue('')
                     self.txt_log.write(u'没有连接设备！！！\n')
+                    self.txt_log.SetDefaultStyle(wx.TextAttr('BLACK'))
                     return
-                self.txt_log.SetValue('')
-                DATA.clear()
-                DATA['osn'] = ''
-                STOP_ALL = False
-                btn.SetLabel(u'停止')
-                self.FindWindowById(id_cb_save_log).Enable(False)
-                if is_wakeup_bc:
-                    wakeup_audio_path = MainSearch(self.FindWindowById(id_tc_save_wakeup_result_path).GetValue(),
-                                                   r'[\S\s]+.mp3').start().get_files()[
-                        0]
-                    WakeupBroadcast(wakeup_bc_tot_count, self)
-                for no in range(len(ACTIVE_DEVICES)):
-                    ThreadLogcat(self, no)
+                try:
+                    if is_wakeup_bc:
+                        wakeup_bc_tot_count = int(self.FindWindowById(id_tc_wakeup_bc_tot_count).GetValue())
+                        wakeup_audio_path = MainSearch(self.FindWindowById(id_tc_save_wakeup_result_path).GetValue(),
+                                                       r'[\S\s]+.MP3').start().get_files()[0]
+                    self.txt_log.SetValue('')
+                    DATA.clear()
+                    DATA['osn'] = ''
+                    STOP_ALL = False
+                    btn.SetLabel(u'停止')
+                    self.FindWindowById(id_cb_save_log).Enable(False)
+                    self.FindWindowById(id_cb_wakeup_broadcast).Enable(False)
+                    for no in range(len(ACTIVE_DEVICES)):
+                        ThreadLogcat(self, no)
+                    if is_wakeup_bc:
+                        WakeupBroadcast(wakeup_bc_tot_count, self)
+                        threading.Thread(target=self.auto_repeat_pull_audio).start()
+                except WindowsError:
+                    self.txt_log.SetDefaultStyle(wx.TextAttr('RED'))
+                    self.txt_log.SetValue('')
+                    self.txt_log.write(u'没有找到音频！！！\n')
+                    self.txt_log.SetDefaultStyle(wx.TextAttr('BLACK'))
             else:
                 STOP_ALL = True
                 btn.SetLabel(u'开始')
@@ -593,10 +626,7 @@ class MyFrame(wx.Frame):
 
         # 开始录音
         elif bid == id_btn_start_record:
-            btn.SetLabel(u'录音中')
-            self.FindWindowById(id_btn_save_record).Enable(True)
-            for no in range(len(ACTIVE_DEVICES)):
-                threading.Thread(target=self.start_record, args=(no,)).start()
+            threading.Thread(target=self.start_record).start()
 
     def active_devices(self, event):
         global ACTIVE_DEVICES, STOP_ALL, DEVICES_ORDERED, ACTIVE_MODULES
@@ -651,15 +681,51 @@ class MyFrame(wx.Frame):
                 cb_mods[d].Enable(False)
         print(ACTIVE_DEVICES)
 
-    def start_record(self, no):
+    def auto_repeat_pull_audio(self):
+        global is_pulling_audio, ready_recording
+        first = True
+        last_ts = 0
+        while not STOP_ALL:
+            if first:
+                last_ts = time.time()
+                first = False
+                self.txt_log.write(u'开启录音中，播放倒计时30s\n')
+                self.start_record()
+                self._delay_play()
+            elif time.time() - last_ts > 3600:
+                last_ts = time.time()
+                is_pulling_audio = True
+                while isplaying:
+                    pass
+                self.save_record()
+                while not ready_recording:
+                    pass
+                self.txt_log.write(u'开启录音中，播放倒计时30s\n')
+                ready_recording = False
+                self.start_record()
+                self._delay_play()
+
+    @staticmethod
+    def _delay_play():
+        global is_pulling_audio
+        time.sleep(30)
+        is_pulling_audio = False
+
+    def start_record(self):
+        global is_pulling_audio
+        is_pulling_audio = True
+        self.FindWindowById(id_btn_start_record).SetLabel(u'录音中')
+        self.FindWindowById(id_btn_save_record).Enable(True)
         self.FindWindowById(id_btn_start_record).Enable(False)
-        os.popen('adb -s %s root' % ACTIVE_DEVICES[no])
-        os.popen('adb -s %s shell rm /sdcard/tencent/wecarspeech/data/dingdang/tmp_wav/*' % ACTIVE_DEVICES[no])
-        os.popen(
-            'adb -s %s shell touch /sdcard/tencent/wecarspeech/data/dingdang/debug_save_wav.conf' % ACTIVE_DEVICES[no])
-        pid = os.popen('adb -s %s shell ps | findstr speech' % ACTIVE_DEVICES[no]).readlines()[0].split()[1]
-        os.popen('adb -s %s shell kill -9 %s' % (ACTIVE_DEVICES[no], pid))
-        # self.FindWindowById(36).Enable(False)
+        for no in range(len(ACTIVE_DEVICES)):
+            os.popen('adb -s %s root' % ACTIVE_DEVICES[no])
+            os.popen('adb -s %s shell rm /sdcard/tencent/wecarspeech/data/dingdang/tmp_wav/*' % ACTIVE_DEVICES[no])
+            os.popen(
+                'adb -s %s shell touch /sdcard/tencent/wecarspeech/data/dingdang/debug_save_wav.conf' % ACTIVE_DEVICES[
+                    no])
+            pid = os.popen('adb -s %s shell ps | findstr speech' % ACTIVE_DEVICES[no]).readlines()[0].split()[1]
+            os.popen('adb -s %s shell kill -9 %s' % (ACTIVE_DEVICES[no], pid))
+            # self.FindWindowById(36).Enable(False)
         # self.sp[no] = subprocess.Popen('adb -s %s shell' % ACTIVE_DEVICES[no], stdin=subprocess.PIPE,
         #                                stdout=subprocess.PIPE, shell=True)
         # sp = self.sp[no]
@@ -679,27 +745,67 @@ class MyFrame(wx.Frame):
         # sp.stdin.write('q\n')
 
     def save_record(self):
+        threading.Thread(target=self._save_record).start()
+
+    def _save_record(self):
+        global ready_recording
         self.FindWindowById(id_btn_start_record).SetLabel(u'开始录音')
         self.FindWindowById(id_btn_save_record).Enable(False)
         if len(ACTIVE_DEVICES) == 0:
             self.txt_log.SetDefaultStyle(wx.TextAttr('RED'))
             self.txt_log.write(u'<<<<<没有连接设备>>>>>\n')
+            self.txt_log.SetDefaultStyle(wx.TextAttr('BLACK'))
             return
         root = wx.Dialog(self, id_dialog_pulling_record, title=u'正在导出,请稍等！', size=(-1, 300))
         root.Center()
         root.Show()
         self.FindWindowById(id_btn_start_record).Enable(True)
         for no in range(len(ACTIVE_DEVICES)):
+            gauge = wx.Gauge(root, range=100, size=(300, 25), pos=(0, 40 + no * 40), style=wx.GA_HORIZONTAL)
+            gauge.Centre(wx.HORIZONTAL)
             os.popen(
                 'adb -s %s shell rm /sdcard/tencent/wecarspeech/data/dingdang/debug_save_wav.conf' %
                 ACTIVE_DEVICES[
                     no])
             pid = os.popen('adb -s %s shell ps | findstr speech' % ACTIVE_DEVICES[no]).readlines()[0].split()[1]
             os.popen('adb -s %s shell kill -9 %s' % (ACTIVE_DEVICES[no], pid))
-            wx.StaticText(root, pos=(5, 45 + no * 40), label='dev%s:' % str(no))
-            gauge = wx.Gauge(root, range=100, size=(300, 25), pos=(0, 40 + no * 40), style=wx.GA_HORIZONTAL)
-            gauge.Centre(wx.HORIZONTAL)
-            ThreadPullAud(gauge, no)
+            cm = get_own_mod(no)
+            print(cm)
+            from_path = '/sdcard/tencent/wecarspeech/data/dingdang/tmp_wav/'
+            to_path = r'%s\%s' % (save_audio, ACTIVE_DEVICES[no])
+            if not os.path.exists(to_path):
+                os.makedirs(to_path)
+            cmd = 'adb -s %s pull %s %s' % (ACTIVE_DEVICES[no], from_path, to_path)
+            process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                       shell=True)
+            stdout_queue = Queue()
+            stdout_reader = AsynchronousFileReader(process.stdout, stdout_queue)
+            stdout_reader.start()
+            while not stdout_reader.eof():
+                while not stdout_queue.empty():
+                    line = stdout_queue.get().decode("utf-8", errors="ignore")
+                    if line.find('building file list') != -1 or line.find('pulled') != -1 or line.find('?]') != -1:
+                        continue
+                    try:
+                        percent = int(line[line.find('[') + 1:line.find('%')])
+                        gauge.SetValue(percent)
+                    except ValueError as e:
+                        print repr(e)
+            process.stdout.close()
+            process.kill()
+            if 'pull_count' not in DATA:
+                DATA['pull_count'] = 1
+            else:
+                DATA['pull_count'] += 1
+            if DATA['pull_count'] == len(ACTIVE_DEVICES):
+                DATA['pull_count'] = 0
+                L.acquire()
+                time.sleep(1)
+                ready_recording = True
+                root.Destroy()
+                if not is_wakeup_bc:
+                    DATA.clear()
+                L.release()
 
 
 class MyApp(wx.App):
@@ -732,29 +838,21 @@ class ThreadLogcat(threading.Thread):
 
 
 class ThreadPullAud(threading.Thread):
-    def __init__(self, fm, no):
+    def __init__(self, gauge, no):
         super(ThreadPullAud, self).__init__()
-        self.fm = fm
+        self.fm = gauge
         self.no = no
         self.start()
 
     def run(self):
+        global is_pulling_audio, ready_recording
         cm = get_own_mod(self.no)
         print(cm)
-        # if cm == AINEMO_LAUNCHER:
-        #     from_path = 'data/log'
-        # elif cm in (AINEMO_1S, AINEMO_1C, AINEMO_1L_demo):
-        #     from_path = 'mnt/aud_rec'
-        # elif cm == CW_box or cm == Max:
-        #     from_path = 'data/local/aud_rec'
-        # else:
-        #     from_path = 'data/local/tmp/aud_rec'
-        from_path = '/sdcard/tencent/wecarspeech/data/dingdang/tmp_wav'
+        from_path = '/sdcard/tencent/wecarspeech/data/dingdang/tmp_wav/'
         to_path = r'%s\%s' % (save_audio, ACTIVE_DEVICES[self.no])
         if not os.path.exists(to_path):
             os.makedirs(to_path)
         cmd = 'adb -s %s pull %s %s' % (ACTIVE_DEVICES[self.no], from_path, to_path)
-        #
         process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    shell=True)
         stdout_queue = Queue()
@@ -779,8 +877,10 @@ class ThreadPullAud(threading.Thread):
         if DATA['pull_count'] == len(ACTIVE_DEVICES):
             L.acquire()
             time.sleep(1)
+            ready_recording = True
             self.fm.GetParent().Destroy()
-            DATA.clear()
+            if not is_wakeup_bc:
+                DATA.clear()
             L.release()
         # self.merge()
 
@@ -827,7 +927,7 @@ class WakeupBroadcast(threading.Thread):
         p.play()
 
     def run(self):
-        global wakeup_bc_cur_count, STOP_ALL
+        global wakeup_bc_cur_count, STOP_ALL, isplaying
         wakeup_bc_cur_count = 0
         print ACTIVE_DEVICES
         for no in range(len(ACTIVE_DEVICES)):
@@ -837,7 +937,10 @@ class WakeupBroadcast(threading.Thread):
         while self.cur_time <= self.wakeup_tot_count:
             if STOP_ALL:
                 break
-            if not p.isplaying():
+            isplaying = p.isplaying()
+            if not isplaying:
+                if is_pulling_audio:
+                    continue
                 self._play(p)
                 self.judge_wakeup(self.t)
                 self.t = time.strftime("%m-%d %H:%M:%S", time.localtime())
@@ -847,6 +950,7 @@ class WakeupBroadcast(threading.Thread):
         p.stop()
         STOP_ALL = True
         self.finish_bc()
+        self.frame.save_record()
 
     # 判断是否唤醒
     def judge_wakeup(self, t):
@@ -870,7 +974,6 @@ class WakeupBroadcast(threading.Thread):
     def update_cur_wakeup_count(self):
         global wakeup_bc_cur_count
         wakeup_bc_cur_count += 1
-        self.frame.txt_log.SetDefaultStyle(wx.TextAttr('BLACK'))
         self.frame.txt_log.write(u'当前播放唤醒词次数: %s\n' % str(wakeup_bc_cur_count))
         self.cur_time += 1
 

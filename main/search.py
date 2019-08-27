@@ -52,7 +52,7 @@ class MainSearch(object):
                     elif self._max != -1:
                         if size > self._max:
                             continue
-                    is_match = re.match(self.name, os.path.split(_f)[1])
+                    is_match = re.match(self.name, os.path.split(_f)[1].upper() )
                     if is_match:
                         self._result_files.append(_f)
                         if self.only:
