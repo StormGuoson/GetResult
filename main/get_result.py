@@ -25,8 +25,7 @@ STOP_ALL = True
 debug_mode = False  # 调试模式，关闭结果上屏
 is_save_log = True  # 保存日志
 is_wakeup_bc = False  # 唤醒播测模式
-is_pulling_audio = True  # 是否正在导出音频
-ready_recording = False  # 准备录音
+is_pulling_audio = False  # 是否正在导出音频
 isplaying = False  # 唤醒音频是否正在播放
 finish_one = False  # 播测完成一人
 save_result = r'd:\log'  # 日志文件夹
@@ -162,7 +161,7 @@ def write_wakeup(txt, no, *arg):
     for d, dev in enumerate(ACTIVE_DEVICES):
         if is_wakeup_bc:
             threading.Thread(
-                target=lambda: os.system('adb -s %s shell input tap 100 100' % dev)).start()
+                target=lambda: os.popen('adb -s %s shell input tap 100 100' % dev)).start()
         d = str(d)
         DATA['text' + d] = DATA['sn' + d] = ''
 
@@ -438,7 +437,6 @@ class MyFrame(wx.Frame):
         # self.FindWindowById(id_btn_save_record).Enable(False)
         self.FindWindowById(id_tc_wakeup_bc_tot_count).Enable(False)
         self.FindWindowById(id_tc_save_wakeup_result_path).Enable(False)
-
         self.refresh_devices()
 
     def init_ele(self):
@@ -715,7 +713,7 @@ class MyFrame(wx.Frame):
         print(ACTIVE_DEVICES)
 
     def auto_repeat_pull_audio(self):
-        global is_pulling_audio, ready_recording
+        global is_pulling_audio
         first = True
         last_ts = 0
         while not STOP_ALL and not finish_one:
@@ -724,19 +722,21 @@ class MyFrame(wx.Frame):
                 first = False
                 self.txt_log.write(u'开启录音中，播放倒计时30s\n')
                 self.start_record()
-                self._delay_play()
+                self.delay_play()
             elif time.time() - last_ts > 3600:
                 last_ts = time.time()
                 is_pulling_audio = True
                 while isplaying:
                     pass
                 self.save_record()
-                while not ready_recording:
+                while is_pulling_audio:
                     pass
                 self.txt_log.write(u'开启录音中，播放倒计时30s\n')
-                ready_recording = False
                 self.start_record()
-                self._delay_play()
+                self.delay_play()
+
+    def delay_play(self):
+        threading.Thread(target=self._delay_play).start()
 
     @staticmethod
     def _delay_play():
@@ -785,10 +785,12 @@ class MyFrame(wx.Frame):
     def save_record(self):
         global is_pulling_audio
         is_pulling_audio = True
-        threading.Thread(target=self._save_record).start()
+        # t1 = threading.Thread(target=self._save_record)
+        # t1.start()
+        self._save_record()
 
     def _save_record(self):
-        global ready_recording
+        global is_pulling_audio
         path = wakeup_cur_single_audio_paths[0]
         self.FindWindowById(id_btn_start_record).SetLabel(u'开始录音')
         # self.FindWindowById(id_btn_save_record).Enable(False)
@@ -810,47 +812,50 @@ class MyFrame(wx.Frame):
                     no])
             pid = os.popen('adb -s %s shell ps | findstr speech' % ACTIVE_DEVICES[no]).readlines()[0].split()[1]
             os.popen('adb -s %s shell kill -9 %s' % (ACTIVE_DEVICES[no], pid))
-            cm = get_own_mod(no)
-            print(cm)
-            from_path = '/sdcard/tencent/wecarspeech/data/dingdang/tmp_wav/'
-            to_path = r'%s\%s' % (save_audio, ACTIVE_DEVICES[no])
-            if is_wakeup_bc:
-                p = path[:path.rfind('\\')]
-                p = p[p.rfind('\\') + 1:]
-                to_path = os.path.join(save_audio, p, ACTIVE_DEVICES[no])
-            if not os.path.exists(to_path):
-                os.makedirs(to_path)
-            cmd = 'adb -s %s pull %s %s' % (ACTIVE_DEVICES[no], from_path, to_path)
-            process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                       shell=True)
-            stdout_queue = Queue()
-            stdout_reader = AsynchronousFileReader(process.stdout, stdout_queue)
-            stdout_reader.start()
-            while not stdout_reader.eof():
-                while not stdout_queue.empty():
-                    line = stdout_queue.get().decode("utf-8", errors="ignore")
-                    if line.find('building file list') != -1 or line.find('pulled') != -1 or line.find('?]') != -1:
-                        continue
-                    try:
-                        percent = int(line[line.find('[') + 1:line.find('%')])
-                        gauge.SetValue(percent)
-                    except ValueError as e:
-                        print repr(e)
-            process.stdout.close()
-            process.kill()
-            if 'pull_count' not in DATA:
-                DATA['pull_count'] = 1
+            if not is_wakeup_bc:
+                ThreadPullAud(gauge, no)
             else:
-                DATA['pull_count'] += 1
-            if DATA['pull_count'] == len(ACTIVE_DEVICES):
-                DATA['pull_count'] = 0
-                L.acquire()
-                time.sleep(1)
-                ready_recording = True
-                root.Destroy()
-                if not is_wakeup_bc:
-                    DATA.clear()
-                L.release()
+                cm = get_own_mod(no)
+                print(cm)
+                from_path = '/sdcard/tencent/wecarspeech/data/dingdang/tmp_wav/'
+                to_path = r'%s\%s' % (save_audio, ACTIVE_DEVICES[no])
+                if is_wakeup_bc:
+                    p = path[:path.rfind('\\')]
+                    p = p[p.rfind('\\') + 1:]
+                    to_path = os.path.join(save_audio, p, ACTIVE_DEVICES[no])
+                if not os.path.exists(to_path):
+                    os.makedirs(to_path)
+                cmd = 'adb -s %s pull %s %s' % (ACTIVE_DEVICES[no], from_path, to_path)
+                process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                           shell=True)
+                stdout_queue = Queue()
+                stdout_reader = AsynchronousFileReader(process.stdout, stdout_queue)
+                stdout_reader.start()
+                while not stdout_reader.eof():
+                    while not stdout_queue.empty():
+                        line = stdout_queue.get().decode("utf-8", errors="ignore")
+                        if line.find('building file list') != -1 or line.find('pulled') != -1 or line.find('?]') != -1:
+                            continue
+                        try:
+                            percent = int(line[line.find('[') + 1:line.find('%')])
+                            gauge.SetValue(percent)
+                        except ValueError as e:
+                            print repr(e)
+                process.stdout.close()
+                process.kill()
+                if 'pull_count' not in DATA:
+                    DATA['pull_count'] = 1
+                else:
+                    DATA['pull_count'] += 1
+                if DATA['pull_count'] == len(ACTIVE_DEVICES):
+                    DATA['pull_count'] = 0
+                    L.acquire()
+                    time.sleep(1)
+                    is_pulling_audio = False
+                    root.Destroy()
+                    if not is_wakeup_bc:
+                        DATA.clear()
+                    L.release()
 
 
 class MyApp(wx.App):
@@ -890,7 +895,7 @@ class ThreadPullAud(threading.Thread):
         self.start()
 
     def run(self):
-        global is_pulling_audio, ready_recording
+        global is_pulling_audio
         cm = get_own_mod(self.no)
         print(cm)
         from_path = '/sdcard/tencent/wecarspeech/data/dingdang/tmp_wav/'
@@ -921,8 +926,9 @@ class ThreadPullAud(threading.Thread):
             DATA['pull_count'] += 1
         if DATA['pull_count'] == len(ACTIVE_DEVICES):
             L.acquire()
+            DATA['pull_count'] = 0
+            is_pulling_audio = False
             time.sleep(1)
-            ready_recording = True
             self.fm.GetParent().Destroy()
             if not is_wakeup_bc:
                 DATA.clear()
@@ -974,7 +980,9 @@ class Multi(threading.Thread):
                 continue
             WakeupBroadcast(self.frame)
             self.frame.auto_repeat_pull_audio()
-            time.sleep(3)
+            time.sleep(1)
+            while is_pulling_audio:
+                pass
             if STOP_ALL:
                 break
         STOP_ALL = True
@@ -984,7 +992,6 @@ class WakeupBroadcast(threading.Thread):
     def __init__(self, main_frame):
         super(WakeupBroadcast, self).__init__()
         self.frame = main_frame
-        self.stream = ''
         self.t = ''
         self.wakeup_bc_cur_count = 1
         self.start()
@@ -995,7 +1002,7 @@ class WakeupBroadcast(threading.Thread):
         finish_one = False
         print ACTIVE_DEVICES
         plays = []
-        time.sleep(1)
+        time.sleep(2)
         for p in wakeup_cur_single_audio_paths:
             plays.append(mp3play.load(p))
         while self.wakeup_bc_cur_count <= wakeup_bc_tot_count:
