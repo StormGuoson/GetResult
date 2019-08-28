@@ -5,3 +5,6 @@ tools/test.py
 main/build
 main/dist
 main/*.mp3
+ids.pyc
+search.pyc
+__init__.pyc
