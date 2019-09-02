@@ -17,4 +17,6 @@ id_tc_log_view = 31  # log输出view
 id_tc_save_record_path = 32  # 音频保存路径
 id_dialog_pulling_record = 33  # 导出音频进度对话框
 id_tc_save_wakeup_result_path = 34  # 唤醒播测结果保存路径
-id_tc_wakeup_bc_tot_count = 10  # 唤醒播测循环次数
+id_tc_wakeup_bc_tot_count = 35  # 唤醒播测循环次数
+id_btn_clear_log = 36  # 清除腾讯日志
+id_btn_save_log = 37  # 保存腾讯日志
