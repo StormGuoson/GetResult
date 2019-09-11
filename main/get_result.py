@@ -1,6 +1,6 @@
 # coding=utf-8
 from Queue import Queue
-from ids import *
+from main.ids import *
 import os
 import subprocess
 import sys
@@ -91,8 +91,6 @@ def auto_set(_text, _sn, _frame):
 def _as(_text, _sn, frame):
     if _text.strip() is not '' and len(_text) != 0:
         frame.txt_log.write(_text + '\n')
-        print type(_text)
-        print len(_text)
     if _sn is not '':
         frame.txt_log.SetDefaultStyle(wx.TextAttr('BLUE'))
         frame.txt_log.write(_sn + '\n')
@@ -166,7 +164,7 @@ def write_wakeup(txt, no, *arg):
         DATA['wakeup_count' + no] = 1
 
     t = time.strftime("%m-%d %H:%M:%S", time.localtime())
-    set_clipboard_text(t)
+    # set_clipboard_text(t)
     msg = u'No%d 唤醒次数 %d   %s\n' % (int(no) + 1, DATA['wakeup_count' + no], t)
     txt.txt_log.write(msg)
 
@@ -188,6 +186,20 @@ def main_doing(_line, _module, _res_txt, no):
         module_s311(_line, _res_txt, no)
 
 
+def write_final_result(res, no, frame):
+    DATA['text' + no] = res
+    threading.Thread(target=_wfr, args=(no, frame)).start()
+
+
+def _wfr(no, frame):
+    time.sleep(1)
+    if 'sn' + no not in DATA.keys():
+        DATA['sn' + no] = ''
+    if DATA['text' + no] != '':
+        DATA['sn' + no] = 'null'
+        auto_set(DATA['text' + no], DATA['sn' + no], frame)
+
+
 def module_s311(line, txt, no):
     if 'wakeup_Type:wordWakeup' in line:
         write_wakeup(txt, no)
@@ -195,7 +207,7 @@ def module_s311(line, txt, no):
         line = str(line[line.find('{'):line.rfind('}') + 1])
         line = json.loads(line)
         text = line['text']
-        DATA['text' + no] = text
+        write_final_result(text, no, txt)
         # DATA['sn' + no] = 'null'
         # auto_set(DATA['text' + no], DATA['sn' + no], txt)
 
@@ -204,8 +216,8 @@ def module_s311(line, txt, no):
         line = str(line[line.find('{'):line.rfind('}') + 1])
         line = json.loads(line)
         text = line['keyword']
+        write_final_result(text, no, txt)
 
-        DATA['text' + no] = text
         # DATA['sn' + no] = 'null'
         # auto_set(DATA['text' + no], DATA['sn' + no], txt)
 
@@ -222,21 +234,34 @@ def module_s111(line, txt, no):
         line = str(line[line.find('{'):line.rfind('}') + 1])
         line = json.loads(line)
         text = line['text']
-        DATA['text' + no] = text
+        write_final_result(text, no, txt)
+
         # DATA['sn' + no] = 'null'
         # auto_set(DATA['text' + no], DATA['sn' + no], txt)
-    # 唤醒后识别
-    # elif u' itn from ' in line and ' to ' in line:
-    #     # print line
-    #     text = line[line.find(' to ') + 4: -1]
-    #     DATA['text' + no] = text
-    # elif u'semantic' in line:
-    #     print line
-    elif 'dbc:' in line:
-        DATA['sn' + no] = ''
-        tts = line[line.find('dbc:') + 4:-1]
-        DATA['text' + no] = tts
+    elif 'TSSCallback onWakeupResult type:1' in line:
+        print line
+        # DATA['sn' + no] = ''
+        line = str(line[line.find('{'):line.rfind('}') + 1])
+        line = json.loads(line)
+        text = line['keyword']
+        write_final_result(text, no, txt)
+
+        # DATA['sn' + no] = 'null'
+        # auto_set(DATA['text' + no], DATA['sn' + no], txt)
+    elif ':playTTS text' in line:
+        print line
+        tts = line[line.find('text:') + 5:line.rfind(',')]
+        DATA['sn' + no] = tts
+        print 'text ' + DATA['text' + no]
         auto_set(DATA['text' + no], DATA['sn' + no], txt)
+    # elif '_WeCarSpeech_' in line and 'speechtext' in line and 'ttstext' in line and 'speechtext=null' not in line:
+    #     text = line[line.find('speechtext') + 11:]
+    #     text = text[:text.find(',')]
+    #     tts = line[line.find('ttstext') + 8:]
+    #     tts = tts[:tts.find(',')]
+    #     DATA['text' + no] = text
+    #     DATA['sn' + no] = tts
+    #     auto_set(DATA['text' + no], DATA['sn' + no], txt)
 
 
 def module_s201(line, txt, no):
@@ -254,11 +279,9 @@ def module_s201(line, txt, no):
         line = str(line[line.find('{'):line.rfind('}') + 1])
         line = json.loads(line)
         text = line['keyword']
-
         DATA['text' + no] = text
         # DATA['sn' + no] = 'null'
         # auto_set(DATA['text' + no], DATA['sn' + no], txt)
-
     elif ':playTTS text' in line:
         tts = line[line.find('text:') + 5:line.rfind(',')]
         DATA['sn' + no] = tts
@@ -266,11 +289,6 @@ def module_s201(line, txt, no):
 
 
 class AsynchronousFileReader(threading.Thread):
-    """
-    Helper class to implement asynchronous reading of a file
-    in a separate thread. Pushes read lines on a queue to
-    be consumed in another thread.
-    """
 
     def __init__(self, fd, queue):
         assert isinstance(queue, Queue)
@@ -280,20 +298,14 @@ class AsynchronousFileReader(threading.Thread):
         self._queue = queue
 
     def run(self):
-        """The body of the tread: read lines and put them on the queue."""
         for line in iter(self._fd.readline, ''):
             self._queue.put(line)
 
     def eof(self):
-        """Check whether there is no more content to expect."""
         return not self.is_alive() and self._queue.empty()
 
 
 def consume(command, frame, no):
-    """
-    Example of how to consume standard output and standard error of
-    a subprocess asynchronously without risk on deadlocking.
-    """
     print(command)
     global STOP_ALL, L
     time.sleep(float(no) / 10.0 * 3)
@@ -325,7 +337,7 @@ def consume(command, frame, no):
             line = stdout_queue.get().decode("utf-8", errors="ignore")
             try:
                 if is_save_log:
-                    log.write(line[:-2])
+                    log.write(line.replace('\r\n', '\n'))
                 main_doing(line, _mod, frame, no)
             except Exception as e:
                 frame.txt_log.SetDefaultStyle(wx.TextAttr('RED'))
@@ -355,7 +367,7 @@ def consume(command, frame, no):
     if is_save_log:
         log.close()
     frame.FindWindowById(id_cb_save_log).Enable(True)
-    frame.FindWindowById(id_cb_wakeup_broadcast).Enable(True)
+    frame.FindWindowById(id_cb_ap_wakeup).Enable(True)
     # Let's be tidy and join the threads we've started.
     # stdout_reader.join()
     # stderr_reader.join()
@@ -423,20 +435,22 @@ class MyFrame(wx.Frame):
     sp = [None, None, None]
 
     def __init__(self):
-        wx.Frame.__init__(self, None, -1, 'GG -- ver:20190902', size=(730, 380),
+        wx.Frame.__init__(self, None, -1, 'GG -- ver:20190909', size=(730, 380),
                           style=wx.DEFAULT_FRAME_STYLE | wx.STAY_ON_TOP)
         self.Centre()
         self.init_ele()
 
         # self.FindWindowById(id_tc_save_log_path).Show(False)
         self.FindWindowById(id_cb_save_log).Show(False)
-        self.FindWindowById(id_tc_save_wakeup_result_path).Enable(False)
+        self.FindWindowById(id_tc_ap_audio_path).Enable(False)
+        self.FindWindowById(id_tc_ap_wakeup_tot_count).Enable(False)
         self.act_refresh_devices()
 
     def init_ele(self):
         cb_lists = [wx.CheckBox(self, id_cb_copy_xls, label=u'上屏', pos=(10, 10)),
                     wx.CheckBox(self, id_cb_save_log, label=u'保存日志', pos=(10, 40)),
-                    wx.CheckBox(self, id_cb_wakeup_broadcast, label=u'唤醒播测', pos=(10, 40))
+                    wx.CheckBox(self, id_cb_ap_wakeup, label=u'唤醒播测', pos=(10, 40)),
+                    wx.CheckBox(self, id_cb_ap_asr, label=u'识别播测', pos=(10, 70))
                     ]
         cb_lists[0].SetValue(True)
         cb_lists[1].SetValue(True)
@@ -444,13 +458,13 @@ class MyFrame(wx.Frame):
             self.Bind(wx.EVT_CHECKBOX, self.set_options, cb)
         self.Bind(wx.EVT_TEXT, self.save_path,
                   wx.TextCtrl(self, id_tc_save_log_path, value=r'd:\log', pos=(273, 300), size=(140, -1)))
-        wx.StaticText(self, label=u'唤醒音频路径', pos=(10, 70))
+        wx.StaticText(self, label=u'音频路径', pos=(10, 100))
         self.Bind(wx.EVT_TEXT, self.save_path,
-                  wx.TextCtrl(self, id_tc_save_wakeup_result_path, save_wakeup_record, pos=(85, 65),
+                  wx.TextCtrl(self, id_tc_ap_audio_path, save_wakeup_record, pos=(85, 95),
                               size=(100, -1)))
         wx.StaticText(self, label=u'循环次数', pos=(90, 40))
         self.Bind(wx.EVT_TEXT, self.save_path,
-                  wx.TextCtrl(self, id_tc_wakeup_bc_tot_count, str(wakeup_bc_tot_count), pos=(145, 36),
+                  wx.TextCtrl(self, id_tc_ap_wakeup_tot_count, str(wakeup_bc_tot_count), pos=(145, 36),
                               size=(40, -1)))
         # 保存音频路径
         self.Bind(wx.EVT_TEXT, self.save_path,
@@ -459,9 +473,9 @@ class MyFrame(wx.Frame):
         index = 0
         for key, value in parent_mod.items():
             if key == S111:
-                rb = wx.RadioButton(self, key, label=value, pos=(10, 100), style=wx.RB_GROUP)
+                rb = wx.RadioButton(self, key, label=value, pos=(10, 140), style=wx.RB_GROUP)
             else:
-                rb = wx.RadioButton(self, key, label=value, pos=(10, 100 + (index * 30)))
+                rb = wx.RadioButton(self, key, label=value, pos=(10, 140 + (index * 30)))
             self.Bind(wx.EVT_RADIOBUTTON, self.set_module, rb)
             index += 1
         i = list(parent_mod.keys())[0]
@@ -534,20 +548,24 @@ class MyFrame(wx.Frame):
                 debug_mode = False
             elif _id == id_cb_save_log:
                 is_save_log = True
-            elif _id == id_cb_wakeup_broadcast:
+            elif _id == id_cb_ap_wakeup:
                 is_wakeup_bc = True
-                self.FindWindowById(id_tc_wakeup_bc_tot_count).Enable(True)
-                self.FindWindowById(id_tc_save_wakeup_result_path).Enable(True)
-                self.FindWindowById(id_tc_wakeup_bc_tot_count).SetFocus()
+                self.FindWindowById(id_tc_ap_wakeup_tot_count).Enable(True)
+                self.FindWindowById(id_tc_ap_audio_path).Enable(True)
+                self.FindWindowById(id_tc_ap_wakeup_tot_count).SetFocus()
+            elif _id == id_cb_ap_asr:
+                id_cb_ap_asr = True
         else:
             if _id == id_cb_copy_xls:
                 debug_mode = True
             elif _id == id_cb_save_log:
                 is_save_log = False
-            elif _id == id_cb_wakeup_broadcast:
+            elif _id == id_cb_ap_wakeup:
                 is_wakeup_bc = False
-                self.FindWindowById(id_tc_wakeup_bc_tot_count).Enable(False)
-                self.FindWindowById(id_tc_save_wakeup_result_path).Enable(False)
+                self.FindWindowById(id_tc_ap_wakeup_tot_count).Enable(False)
+                self.FindWindowById(id_tc_ap_audio_path).Enable(False)
+            elif _id == id_cb_ap_asr:
+                id_cb_ap_asr = True
 
     def set_module(self, event):
         global CURRENT_MODULE, STOP_ALL, ACTIVE_DEVICES
@@ -668,7 +686,7 @@ class MyFrame(wx.Frame):
                 self.sras()
                 self.FindWindowById(id_btn_start).SetLabel(u'停止')
                 self.FindWindowById(id_cb_save_log).Enable(False)
-                self.FindWindowById(id_cb_wakeup_broadcast).Enable(False)
+                self.FindWindowById(id_cb_ap_wakeup).Enable(False)
                 for no in range(len(ACTIVE_DEVICES)):
                     ThreadLogcat(self, no)
                 if is_wakeup_bc:
@@ -677,8 +695,8 @@ class MyFrame(wx.Frame):
                         rp = Report(save_wakeup_record, dev)
                         reports.append(rp)
                         threading.Thread(target=rp.check_sys_info).start()
-                    wakeup_bc_tot_count = int(self.FindWindowById(id_tc_wakeup_bc_tot_count).GetValue())
-                    save_wakeup_record = self.FindWindowById(id_tc_save_wakeup_result_path).GetValue()
+                    wakeup_bc_tot_count = int(self.FindWindowById(id_tc_ap_wakeup_tot_count).GetValue())
+                    save_wakeup_record = self.FindWindowById(id_tc_ap_audio_path).GetValue()
                     Multi(save_wakeup_record, self)
                     # paths = os.listdir(main_path)
                     # for path in paths:
@@ -1019,6 +1037,9 @@ class Multi(threading.Thread):
         self.frame.txt_log.write(u'开启录音中，播放倒计时30s\n')
         self.frame.delay_play()
         paths = os.listdir(self.main_path)
+        for path in paths:
+            if os.path.isfile(os.path.join(self.main_path, path)):
+                paths.remove(path)
         print paths
         for path in paths:
             path = os.path.join(self.main_path, path)
@@ -1033,6 +1054,7 @@ class Multi(threading.Thread):
             if STOP_ALL:
                 break
         STOP_ALL = True
+        time.sleep(1)
         for no in range(len(ACTIVE_DEVICES)):
             reports[no].parser_wakeup_txt()
             reports[no].write_excel()
