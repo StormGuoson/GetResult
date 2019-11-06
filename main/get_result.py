@@ -14,14 +14,13 @@ import win32con
 import wx
 from pykeyboard import PyKeyboard
 
-from main.create_wakeup_report import Report
+from create_wakeup_report import Report
 from search import MainSearch
 
 reload(sys)
 sys.setdefaultencoding('utf-8')
 L = threading.Lock()
 k = PyKeyboard()
-
 STOP_ALL = True
 debug_mode = False  # 调试模式，关闭结果上屏
 is_save_log = True  # 保存日志
@@ -43,16 +42,18 @@ UNACTIVE_DEVICES = []  # 休眠的设备
 ACTIVE_MODULES = [-1, -1, -1, -1, -1]  # 各设备的模式
 
 S111 = 'S111'
-S201 = 'S201'
 S311 = 'S311'
+S203EV = 'S203ev'
 
 CURRENT_MODULE = S111  # 当前模式
 
-cb_mod_list = [S111, S311, u'——']
+cb_mod_list = [S111, S311, S203EV, u'——']
 
-parent_mod = {10000: S111,
-              # 10001: S201,
-              10002: S311}
+parent_mod = {
+    # 10000: S111,
+    #           10001: S311,
+    #           10002: S203EV,
+}
 
 child_mod = {}
 activities = {}
@@ -65,7 +66,8 @@ def reset_data():
         DATA['is_wakeup' + i] = False
         DATA['is_reced' + i] = False
         DATA['text' + i] = ''
-        DATA['sn' + i] = ''
+        DATA['sn' + i] = []
+        DATA['wakeup_count' + i] = 0
 
 
 # 复制粘贴
@@ -85,9 +87,9 @@ def paste():
 
 
 def click(n):
-    time.sleep(.08)
+    time.sleep(.05)
     k.tap_key(n)
-    time.sleep(.08)
+    time.sleep(.05)
 
 
 def auto_set(_no, _frame):
@@ -109,15 +111,14 @@ def _as(no, frame):
     _sn = DATA['sn' + no]
     if _text.strip() is not '' and len(_text) != 0:
         frame.txt_log.write(_text + '\n')
-    if _sn is not '':
-        frame.txt_log.SetDefaultStyle(wx.TextAttr('BLUE'))
-        frame.txt_log.write(_sn + '\n')
-        frame.txt_log.SetDefaultStyle(wx.TextAttr('BLACK'))
+
+    frame.txt_log.SetDefaultStyle(wx.TextAttr('BLUE'))
+    for ele in _sn:
+        frame.txt_log.write(ele + '\n')
+    frame.txt_log.SetDefaultStyle(wx.TextAttr('BLACK'))
 
     for d in range(len(ACTIVE_DEVICES)):
         d = str(d)
-        if ('text' + d) not in DATA:
-            return
         if DATA['text' + d] == '':
             return
     if not debug_mode:
@@ -125,50 +126,37 @@ def _as(no, frame):
             s = str(s)
             set_clipboard_text(DATA['text' + s])
             paste()
-            time.sleep(0.08)
-            k.tap_key(k.escape_key)
-            time.sleep(0.08)
-            if DATA['sn' + s] is not '':
-                k.tap_key(k.right_key)
-                time.sleep(0.08)
-                set_clipboard_text(DATA['sn' + s])
-                time.sleep(0.08)
+            click(k.escape_key)
+            for ele in DATA['sn' + s]:
+                click(k.right_key)
+                set_clipboard_text(ele)
                 paste()
-                time.sleep(0.08)
-            k.tap_key(k.escape_key)
+                click(k.escape_key)
             if int(s) == len(ACTIVE_DEVICES) - 1:
-                k.tap_key(k.down_key)
-                time.sleep(0.08)
+                click(k.down_key)
             else:
-                k.tap_key(k.right_key)
-                time.sleep(0.08)
+                click(k.right_key)
         for e in range(len(ACTIVE_DEVICES)):
-            if DATA['sn' + str(e)] is not '':
-                time.sleep(0.08)
-                k.tap_key(k.left_key)
-                time.sleep(0.08)
+            e = str(e)
+            for _ in DATA['sn' + e]:
+                click(k.left_key)
             if int(e) != len(ACTIVE_DEVICES) - 1:
-                k.tap_key(k.left_key)
-                time.sleep(0.08)
+                click(k.left_key)
     all_recognized = True
-    # if write_rec:
-    #     msg = ''
-    #     for s in range(len(ACTIVE_DEVICES)):
-    #         msg += DATA['text' + str(s)] + '\t' + DATA['sn' + str(s)]
-    #         if s + 1 != len(ACTIVE_DEVICES):
-    #             msg += '\t'
-    #     save_memory(SAVE_RESULTS_PATH, msg + '\n')
     for d in range(len(ACTIVE_DEVICES)):
         d = str(d)
-        DATA['text' + d] = DATA['sn' + d] = ''
+        DATA['text' + d] = ''
+        DATA['sn' + d] = []
 
 
 def save_logcat(no):
     dev = ACTIVE_DEVICES[int(no)]
     t = time.strftime("%m-%d %H-%M-%S", time.localtime())
-    log_path = os.path.join(save_log, '%s@%s.txt' % (t, dev))
-    if not os.path.exists(save_log):
-        os.makedirs(save_log)
+    date = time.strftime("%m-%d", time.localtime())
+    dir_path = os.path.join(save_log, date)
+    log_path = os.path.join(dir_path, '%s@%s.txt' % (t, dev))
+    if not os.path.exists(dir_path):
+        os.makedirs(dir_path)
     f = open(log_path, 'w')
     return f
 
@@ -179,12 +167,9 @@ def write_wakeup(txt, no, *arg):
     all_recognized = False
     DATA['is_wakeup' + str(no)] = True
     DATA['is_reced' + str(no)] = False
-
-    if ('wakeup_count' + no) in DATA.keys():
-        DATA['wakeup_count' + no] += 1
-    else:
-        DATA['wakeup_count' + no] = 1
-
+    DATA['text' + str(no)] = ''
+    DATA['sn' + str(no)] = []
+    DATA['wakeup_count' + no] += 1
     t = time.strftime("%m-%d %H:%M:%S", time.localtime())
     msg = u'No%d 唤醒次数 %d   %s\n' % (int(no) + 1, DATA['wakeup_count' + no], t)
     txt.txt_log.write(msg)
@@ -199,26 +184,37 @@ def write_wakeup(txt, no, *arg):
 def main_doing(_line, _module, _res_txt, no):
     if _module == S111:
         module_s111(_line, _res_txt, no)
-    elif _module == S201:
-        module_s201(_line, _res_txt, no)
+    elif _module == S203EV:
+        module_s203ev(_line, _res_txt, no)
     elif _module == S311:
         module_s311(_line, _res_txt, no)
 
 
+def waiting_tts(frame, no):
+    threading.Thread(target=_wt, args=(frame, no)).start()
+
+
+def _wt(frame, no):
+    start = time.time()
+    has_tts = True
+    while not DATA['is_reced' + no]:
+        if time.time() - start > 1:
+            has_tts = False
+            break
+    if not has_tts:
+        DATA['sn' + no].append('null')
+        auto_set(no, frame)
+
+
 def module_s311(line, txt, no):
-    if 'onPlayerStateChanged end mPlayerState' in line and not DATA['is_reced' + str(no)]:
-        if DATA['text' + no] == '':
-            return
-        print(line)
-        DATA['sn' + no] = 'null'
-        auto_set(no, txt)
-    elif line.endswith('wakeup_Type:wordWakeup\r\r\n'):
+    if line.endswith('wakeup_Type:wordWakeup\n'):
         write_wakeup(txt, no)
     elif 'onSpeechResult' in line and u'最终结果' in line:
         print(line)
         line = str(line[line.find('{'):line.rfind('}') + 1])
         line = json.loads(line)
         DATA['text' + no] = line['text']
+        waiting_tts(txt, no)
     elif 'TSSCallback onWakeupResult type:1' in line:
         if '"小安你好"' in line or '"召唤妲己"' in line or '"召唤李白"' in line or '"叮当叮当"' in line:
             return
@@ -227,29 +223,53 @@ def module_s311(line, txt, no):
         line = json.loads(line)
         DATA['text' + no] = line['keyword']
         DATA['is_reced' + str(no)] = False
+        waiting_tts(txt, no)
+    elif '\"domain\"' in line and '\"intent\"' and DATA['sn' + no] == []:
+        print(line)
+        domain = line[line.find('\"domain\":\"') + 10:]
+        domain = domain[:domain.find('\"')]
+        intent = line[line.find('\"intent\":\"') + 10:]
+        intent = intent[:intent.find('\"')]
+        if domain == '':
+            domain = 'N/A'
+        if intent == '':
+            intent = 'N/A'
+        if len(domain) > 20 or len(intent) > 20:
+            return
+        print(domain)
+        print(intent)
+        DATA['sn' + no] = [domain, intent]
+    # elif 'TryWordRepo' in line and ' domain ' in line and ' intent ' in line and DATA['sn' + no] == []:
+    #     domain = line[line.find(' domain =') + 10:]
+    #     domain = domain[:domain.find(',')]
+    #     intent = line[line.find(' intent =') + 10:].rstrip('\r\r\n').rstrip('\r\n')
+    #     if intent == '':
+    #         intent = 'N/A'
+    #     print(domain)
+    #     print(intent)
+    #     DATA['sn' + no] = [domain, intent]
     elif ':playTTS text' in line:
         print(line)
         tts = line[line.find('text:') + 5:line.rfind(',')]
         if DATA['text' + no] == '':
             DATA['text' + no] = 'null'
-        DATA['sn' + no] = tts
+        DATA['sn' + no].append(tts)
         auto_set(no, txt)
 
 
 def module_s111(line, txt, no):
-    if 'onPlayerStateChanged end mPlayerState' in line:
-        if DATA['text' + no] == '':
-            return
-        print(line)
-        DATA['sn' + no] = 'null'
-        auto_set(no, txt)
-    elif line.endswith('wakeup_Type:wordWakeup\r\n'):
+    module_s311(line, txt, no)
+
+
+def module_s203ev(line, txt, no):
+    if line.endswith('wakeup_Type:wordWakeup\n'):
         write_wakeup(txt, no)
-    elif 'onSpeechResult' in line and u'最终结果' in line:
+    elif 'onSpeechResult type:1' in line:
         print(line)
         line = str(line[line.find('{'):line.rfind('}') + 1])
         line = json.loads(line)
         DATA['text' + no] = line['text']
+        waiting_tts(txt, no)
     elif 'TSSCallback onWakeupResult type:1' in line:
         if '"小安你好"' in line or '"召唤妲己"' in line or '"召唤李白"' in line or '"叮当叮当"' in line:
             return
@@ -258,20 +278,37 @@ def module_s111(line, txt, no):
         line = json.loads(line)
         DATA['text' + no] = line['keyword']
         DATA['is_reced' + str(no)] = False
+        waiting_tts(txt, no)
+    elif '\"domain\"' in line and '\"intent\"' and DATA['sn' + no] == [] and '[b]' not in line:
+        print(line)
+        domain = line[line.find('\"domain\":\"') + 10:]
+        domain = domain[:domain.find('\"')]
+        intent = line[line.find('\"intent\":\"') + 10:]
+        intent = intent[:intent.find('\"')]
+        if intent == '':
+            intent = 'N/A'
+        print(domain)
+        print(intent)
+        DATA['sn' + no] = [domain, intent]
+    elif 'TryWordRepo' in line and ' domain ' in line and ' intent ' in line and DATA['sn' + no] == []:
+        domain = line[line.find(' domain =') + 10:]
+        domain = domain[:domain.find(',')]
+        intent = line[line.find(' intent =') + 10:].rstrip('\r\r\n').rstrip('\r\n')
+        if intent == '':
+            intent = 'N/A'
+        print(domain)
+        print(intent)
+        DATA['sn' + no] = [domain, intent]
     elif ':playTTS text' in line:
         print(line)
         tts = line[line.find('text:') + 5:line.rfind(',')]
         if DATA['text' + no] == '':
             DATA['text' + no] = 'null'
-        DATA['sn' + no] = tts
+        DATA['sn' + no].append(tts)
         auto_set(no, txt)
 
 
-def module_s201(line, txt, no):
-    pass
-
-
-class AsynchronousFileReader(threading.Thread):
+class FileReader(threading.Thread):
 
     def __init__(self, fd, queue):
         assert isinstance(queue, Queue)
@@ -282,7 +319,7 @@ class AsynchronousFileReader(threading.Thread):
 
     def run(self):
         for line in iter(self._fd.readline, ''):
-            self._queue.put(line)
+            self._queue.put(line.replace('\r\r\n', '\n').replace('\r\n', '\n'))
 
     def eof(self):
         return not self.is_alive() and self._queue.empty()
@@ -292,17 +329,14 @@ def consume(command, frame, no):
     print(command)
     global STOP_ALL, L
     time.sleep(float(no) / 10.0 * 3)
-    # Launch the command as subprocess.
     process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                shell=True)
-    # Launch the asynchronous readers of the process' stdout and stderr.
     stdout_queue = Queue()
-    stdout_reader = AsynchronousFileReader(process.stdout, stdout_queue)
+    stdout_reader = FileReader(process.stdout, stdout_queue)
     stdout_reader.start()
     stderr_queue = Queue()
-    stderr_reader = AsynchronousFileReader(process.stderr, stderr_queue)
+    stderr_reader = FileReader(process.stderr, stderr_queue)
     stderr_reader.start()
-    # Check the queues if we received some output (until there is nothing more to get).
     frame.txt_log.write(('No%s_' % str(int(no) + 1)) + ACTIVE_DEVICES[int(no)] + u' <<<开始>>>' + '\n')
     _mod = get_own_mod(no)
     log = None
@@ -320,7 +354,7 @@ def consume(command, frame, no):
             line = stdout_queue.get().decode("utf-8", errors="ignore")
             try:
                 if is_save_log:
-                    log.write(line.replace('\r\n', '\n'))
+                    log.write(line)
                 main_doing(line, _mod, frame, no)
             except IndexError as e:
                 frame.txt_log.SetDefaultStyle(wx.TextAttr('RED'))
@@ -419,7 +453,7 @@ class MyFrame(wx.Frame):
     sp = [None, None, None]
 
     def __init__(self):
-        wx.Frame.__init__(self, None, -1, 'GG -- ver:20190920', size=(730, 380),
+        wx.Frame.__init__(self, None, -1, 'GG -- ver:20191021', size=(730, 350),
                           style=wx.DEFAULT_FRAME_STYLE | wx.STAY_ON_TOP)
         self.Centre()
         self.init_ele()
@@ -442,7 +476,7 @@ class MyFrame(wx.Frame):
         for cb in cb_lists:
             self.Bind(wx.EVT_CHECKBOX, self.set_options, cb)
         self.Bind(wx.EVT_TEXT, self.save_path,
-                  wx.TextCtrl(self, id_tc_save_log_path, value=r'd:\log', pos=(273, 300), size=(140, -1)))
+                  wx.TextCtrl(self, id_tc_save_log_path, value=r'd:\log', pos=(273, 260), size=(140, -1)))
         wx.StaticText(self, label=u'音频路径', pos=(10, 100))
         self.Bind(wx.EVT_TEXT, self.save_path,
                   wx.TextCtrl(self, id_tc_ap_audio_path, ap_record_path, pos=(85, 95),
@@ -452,8 +486,8 @@ class MyFrame(wx.Frame):
                   wx.TextCtrl(self, id_tc_ap_wakeup_tot_count, str(ap_wakeup_tot_count), pos=(145, 36),
                               size=(40, -1)))
         # 保存音频路径
-        self.Bind(wx.EVT_TEXT, self.save_path,
-                  wx.TextCtrl(self, id_tc_save_record_path, value=r'd:\audio', pos=(273, 260), size=(140, -1)))
+        # self.Bind(wx.EVT_TEXT, self.save_path,
+        #           wx.TextCtrl(self, id_tc_save_record_path, value=r'd:\audio', pos=(273, 260), size=(140, -1)))
         # 选择模式
         index = 0
         for key, value in parent_mod.items():
@@ -463,8 +497,9 @@ class MyFrame(wx.Frame):
                 rb = wx.RadioButton(self, key, label=value, pos=(10, 140 + (index * 30)))
             self.Bind(wx.EVT_RADIOBUTTON, self.set_module, rb)
             index += 1
-        i = list(parent_mod.keys())[0]
-        self.FindWindowById(i).SetValue(True)
+        if parent_mod:
+            i = list(parent_mod.keys())[0]
+            self.FindWindowById(i).SetValue(True)
 
         # 模式细化
         # combo_cw_tv = wx.ComboBox(self, 10000 * 2, pos=(90, 96), size=(90, -1), choices=child_mod[10000])
@@ -490,17 +525,17 @@ class MyFrame(wx.Frame):
         self.Bind(wx.EVT_BUTTON, self.button_action,
                   wx.Button(self, id_btn_reboot, label=u'重启设备', pos=(370, 20)))
         # 开始录音
-        self.Bind(wx.EVT_BUTTON, self.button_action,
-                  wx.Button(self, id_btn_start_record, label=u'开始录音', pos=(180, 258)))
+        # self.Bind(wx.EVT_BUTTON, self.button_action,
+        #           wx.Button(self, id_btn_start_record, label=u'开始录音', pos=(180, 258)))
         # 保存音频btn
-        self.Bind(wx.EVT_BUTTON, self.button_action,
-                  wx.Button(self, id_btn_save_record, label=u'保存音频', pos=(420, 258)))
+        # self.Bind(wx.EVT_BUTTON, self.button_action,
+        #           wx.Button(self, id_btn_save_record, label=u'保存音频', pos=(420, 258)))
         # 清除日志
         self.Bind(wx.EVT_BUTTON, self.button_action,
-                  wx.Button(self, id_btn_clear_log, label=u'清除日志', pos=(180, 297)))
-        # 保存日志
+                  wx.Button(self, id_btn_clear_log, label=u'清除日志', pos=(180, 258)))
+        # 保存Xlog
         self.Bind(wx.EVT_BUTTON, self.button_action,
-                  wx.Button(self, id_btn_save_log, label=u'保存日志', pos=(420, 297)))
+                  wx.Button(self, id_btn_save_log, label=u'保存Xlog', pos=(420, 258)))
         # 输出log
         self.txt_log = wx.TextCtrl(self, id_tc_log_view, pos=(190, 80), size=(330, 170),
                                    style=wx.TE_MULTILINE | wx.EXPAND | wx.TE_READONLY | wx.TE_RICH2)
@@ -508,10 +543,12 @@ class MyFrame(wx.Frame):
         for i in range(5):
             self.cb_dev_lists.append(
                 wx.CheckBox(self, 1000 + i, label=u'等待设备连接                ', pos=(540, 50 * (i + 1))))
+            self.FindWindowById(1000 + i).Enable(False)
             self.Bind(wx.EVT_CHECKBOX, self.active_devices, self.cb_dev_lists[i])
 
             combo_mod = wx.ComboBox(self, 2000 + i, pos=(530, 20 + 50 * (i + 1)), size=(-1, -1), choices=cb_mod_list)
             combo_mod.SetValue(u'——')
+            combo_mod.Enable(False)
             combo_mod.Bind(wx.EVT_COMBOBOX, self.set_single_mod)
             self.cb_mods_lists.append(combo_mod)
 
@@ -621,6 +658,7 @@ class MyFrame(wx.Frame):
             self.act_clear_log()
         # 保存日志
         elif bid == id_btn_save_log:
+            print('save log')
             self.act_save_log()
 
     @staticmethod
@@ -971,7 +1009,7 @@ class ThreadPullAud(threading.Thread):
         process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    shell=True)
         stdout_queue = Queue()
-        stdout_reader = AsynchronousFileReader(process.stdout, stdout_queue)
+        stdout_reader = FileReader(process.stdout, stdout_queue)
         stdout_reader.start()
         while not stdout_reader.eof():
             while not stdout_queue.empty():
@@ -1035,9 +1073,9 @@ class MultiAPW(threading.Thread):
 
     def run(self):
         global wakeup_cur_single_audio_paths, STOP_ALL
-        self.frame.start_record()
-        self.frame.txt_log.write(u'开启录音中，播放倒计时30s\n')
-        self.frame.delay_play()
+        # self.frame.start_record()
+        # self.frame.txt_log.write(u'开启录音中，播放倒计时30s\n')
+        # self.frame.delay_play()
         paths = os.listdir(self.main_path)
         for path in paths:
             if os.path.isfile(os.path.join(self.main_path, path)):
