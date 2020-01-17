@@ -453,7 +453,7 @@ class MyFrame(wx.Frame):
     sp = [None, None, None]
 
     def __init__(self):
-        wx.Frame.__init__(self, None, -1, 'GG -- ver:20191021', size=(730, 350),
+        wx.Frame.__init__(self, None, -1, 'GG -- ver:20191216', size=(730, 350),
                           style=wx.DEFAULT_FRAME_STYLE | wx.STAY_ON_TOP)
         self.Centre()
         self.init_ele()
@@ -1281,10 +1281,13 @@ class Tools(object):
         cmds = ['/data/anr/*',
                 '/sdcard/btsnoop_hci.log',
                 '/data/logger/*',
+                '/data/media/btsnoop.log',
                 '/data/tombstones/*',
+                '/sdcard/LOG/',
                 '/data/system/dropbox/*',
                 '/sdcard/tencent/wecarnavi/log/*',
                 '/sdcard/tencent/wecarspeech/log/*',
+                '/user_data/incall_log/*',
                 ]
         for dev in ACTIVE_DEVICES:
             self.popen('adb -s %s shell rm -rf' % dev, cmds)
